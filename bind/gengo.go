@@ -101,20 +101,13 @@ func (g *goGen) gen() error {
 
 func (g *goGen) genFunc(o *types.Func) {
 	sig := o.Type().(*types.Signature)
-	args := sig.Params()
-	res := sig.Results()
 
 	g.Printf(`
 //export GoPy_%[1]s
-// GoPy_%[1]s wraps %[2]s.%[1]s
-// %[3]s
-// %[4]v
-// %[5]v
-// %[6]v
-func GoPy_%[1]s%[7]v {
+// GoPy_%[1]s wraps %[2]s
+func GoPy_%[1]s%[3]v {
 `,
-		o.Name(), g.pkg.Name(), o.FullName(),
-		sig, args, res,
+		o.Name(), o.FullName(),
 		strings.TrimLeft(sig.String(), "func "),
 	)
 
