@@ -86,7 +86,7 @@ func (g *goGen) gen() error {
 		}
 	}
 
-	g.Printf("// Import imports the generated CPython module\nfunc Import() {\n")
+	g.Printf("// Register registers the generated CPython module with the CPython runtime\nfunc Register() {\n")
 	g.Indent()
 	g.Printf("C.init%[1]s()\n", g.pkg.Name())
 	g.Outdent()
