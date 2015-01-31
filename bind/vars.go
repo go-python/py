@@ -76,7 +76,7 @@ func (v *Var) genRetDecl(g *cpyGen) {
 func (v *Var) getArgParse() (string, string) {
 	addr := "&c_" + v.Var.Name()
 	if v.isGoString() {
-		addr = "(GoString*)(&cgopy_" + v.Var.Name() + ")"
+		addr = "&cgopy_" + v.Var.Name()
 	}
 	return v.dtype.pyfmt, addr
 }
