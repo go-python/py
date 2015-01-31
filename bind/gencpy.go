@@ -156,16 +156,14 @@ func (g *cpyGen) gen() error {
 	g.Outdent()
 	g.Printf("};\n\n")
 
-	g.Printf(`PyMODINIT_FUNC
-init%[1]s(void)
-{
-    (void) Py_InitModule3(%[1]q, GoPy_%[1]s_Methods, %[2]q);
-}
-
-`,
+	g.Printf("PyMODINIT_FUNC\ninit%[1]s(void)\n{\n", g.pkg.Name())
+	g.Indent()
+	g.Printf("(void) Py_InitModule3(%[1]q, GoPy_%[1]s_Methods, %[2]q);\n",
 		g.pkg.Name(),
 		"FIXME(sbinet): documentation for package "+g.pkg.Name(),
 	)
+	g.Outdent()
+	g.Printf("}\n\n")
 
 	if len(g.err) > 0 {
 		return g.err
