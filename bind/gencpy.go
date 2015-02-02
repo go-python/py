@@ -91,7 +91,7 @@ type cpyGen struct {
 	*printer
 
 	fset *token.FileSet
-	pkg  *types.Package
+	pkg  *Package
 	err  ErrorList
 }
 
@@ -100,8 +100,9 @@ func (g *cpyGen) gen() error {
 	g.genPreamble()
 
 	var funcs []string
+	docs := make(map[string]string)
 
-	scope := g.pkg.Scope()
+	scope := g.pkg.pkg.Scope()
 	names := scope.Names()
 	for _, name := range names {
 		obj := scope.Lookup(name)
@@ -122,6 +123,7 @@ func (g *cpyGen) gen() error {
 		case *types.Func:
 			funcs = append(funcs, obj.Name())
 			g.genFunc(obj)
+			docs[obj.Name()] = g.pkg.getDoc(obj)
 
 		case *types.TypeName:
 			named := obj.Type().(*types.Named)
@@ -144,23 +146,23 @@ func (g *cpyGen) gen() error {
 		}
 	}
 
-	g.Printf("static PyMethodDef GoPy_%s_Methods[] = {\n", g.pkg.Name())
+	g.Printf("static PyMethodDef GoPy_%s_Methods[] = {\n", g.pkg.pkg.Name())
 	g.Indent()
 	for _, name := range funcs {
 		//obj := scope.Lookup(name)
 		g.Printf("{%[1]q, %[2]s, METH_VARARGS, %[3]q},\n",
-			name, "gopy_"+name, "doc for: "+g.pkg.Name()+"."+name,
+			name, "gopy_"+name, docs[name],
 		)
 	}
 	g.Printf("{NULL, NULL, 0, NULL}        /* Sentinel */\n")
 	g.Outdent()
 	g.Printf("};\n\n")
 
-	g.Printf("PyMODINIT_FUNC\ninit%[1]s(void)\n{\n", g.pkg.Name())
+	g.Printf("PyMODINIT_FUNC\ninit%[1]s(void)\n{\n", g.pkg.pkg.Name())
 	g.Indent()
 	g.Printf("(void) Py_InitModule3(%[1]q, GoPy_%[1]s_Methods, %[2]q);\n",
-		g.pkg.Name(),
-		"FIXME(sbinet): documentation for package "+g.pkg.Name(),
+		g.pkg.pkg.Name(),
+		g.pkg.doc.Doc,
 	)
 	g.Outdent()
 	g.Printf("}\n\n")
@@ -179,7 +181,7 @@ func (g *cpyGen) genFunc(o *types.Func) {
 static PyObject*
 gopy_%[1]s(PyObject *self, PyObject *args) {
 `,
-		o.Name(), g.pkg.Name(),
+		o.Name(), g.pkg.pkg.Name(),
 	)
 
 	g.Indent()
@@ -283,6 +285,6 @@ func (g *cpyGen) genFuncBody(o *types.Func) {
 }
 
 func (g *cpyGen) genPreamble() {
-	n := g.pkg.Name()
-	g.Printf(cPreamble, n, g.pkg.Path())
+	n := g.pkg.pkg.Name()
+	g.Printf(cPreamble, n, g.pkg.pkg.Path())
 }

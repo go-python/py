@@ -33,7 +33,7 @@ type goGen struct {
 	*printer
 
 	fset *token.FileSet
-	pkg  *types.Package
+	pkg  *Package
 	err  ErrorList
 }
 
@@ -43,7 +43,7 @@ func (g *goGen) gen() error {
 
 	var funcs []string
 
-	scope := g.pkg.Scope()
+	scope := g.pkg.pkg.Scope()
 	names := scope.Names()
 	for _, name := range names {
 		obj := scope.Lookup(name)
@@ -88,7 +88,7 @@ func (g *goGen) gen() error {
 
 	g.Printf("// Register registers the generated CPython module with the CPython runtime\nfunc Register() {\n")
 	g.Indent()
-	g.Printf("C.init%[1]s()\n", g.pkg.Name())
+	g.Printf("C.init%[1]s()\n", g.pkg.pkg.Name())
 	g.Outdent()
 	g.Printf("}\n")
 
@@ -127,7 +127,7 @@ func (g *goGen) genFuncBody(o *types.Func) {
 
 	g.Printf(
 		"%[3]s%[1]s.%[2]s(",
-		g.pkg.Name(),
+		g.pkg.pkg.Name(),
 		o.Name(),
 		ret,
 	)
@@ -146,6 +146,6 @@ func (g *goGen) genFuncBody(o *types.Func) {
 }
 
 func (g *goGen) genPreamble() {
-	n := g.pkg.Name()
-	g.Printf(goPreamble, n, g.pkg.Path())
+	n := g.pkg.pkg.Name()
+	g.Printf(goPreamble, n, g.pkg.pkg.Path())
 }
