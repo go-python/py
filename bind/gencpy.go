@@ -88,11 +88,22 @@ static char* _cgopy_makecstring(const GoString *gostr) {
 )
 
 type cpyGen struct {
-	*printer
+	decl *printer
+	impl *printer
 
 	fset *token.FileSet
 	pkg  *Package
 	err  ErrorList
+}
+
+type cpyStruct struct {
+	obj *types.TypeName
+	typ *types.Struct
+}
+
+func (c *cpyStruct) prefix(s string) string {
+	pkgname := c.obj.Pkg().Name()
+	return pkgname + s + c.obj.Name()
 }
 
 func (g *cpyGen) gen() error {
@@ -100,6 +111,8 @@ func (g *cpyGen) gen() error {
 	g.genPreamble()
 
 	var funcs []string
+	var structs []cpyStruct
+
 	docs := make(map[string]string)
 
 	scope := g.pkg.pkg.Scope()
@@ -129,8 +142,9 @@ func (g *cpyGen) gen() error {
 			named := obj.Type().(*types.Named)
 			switch typ := named.Underlying().(type) {
 			case *types.Struct:
-				// TODO(sbinet)
-				panic(fmt.Errorf("not yet supported: %v (%T)", typ, obj))
+				g.genStruct(obj, typ)
+				structs = append(structs, cpyStruct{typ: typ, obj: obj})
+
 			case *types.Interface:
 				// TODO(sbinet)
 				panic(fmt.Errorf("not yet supported: %v (%T)", typ, obj))
@@ -146,26 +160,42 @@ func (g *cpyGen) gen() error {
 		}
 	}
 
-	g.Printf("static PyMethodDef GoPy_%s_Methods[] = {\n", g.pkg.pkg.Name())
-	g.Indent()
+	g.impl.Printf("static PyMethodDef GoPy_%s_Methods[] = {\n", g.pkg.pkg.Name())
+	g.impl.Indent()
 	for _, name := range funcs {
 		//obj := scope.Lookup(name)
-		g.Printf("{%[1]q, %[2]s, METH_VARARGS, %[3]q},\n",
+		g.impl.Printf("{%[1]q, %[2]s, METH_VARARGS, %[3]q},\n",
 			name, "gopy_"+name, docs[name],
 		)
 	}
-	g.Printf("{NULL, NULL, 0, NULL}        /* Sentinel */\n")
-	g.Outdent()
-	g.Printf("};\n\n")
+	g.impl.Printf("{NULL, NULL, 0, NULL}        /* Sentinel */\n")
+	g.impl.Outdent()
+	g.impl.Printf("};\n\n")
 
-	g.Printf("PyMODINIT_FUNC\ninit%[1]s(void)\n{\n", g.pkg.pkg.Name())
-	g.Indent()
-	g.Printf("(void) Py_InitModule3(%[1]q, GoPy_%[1]s_Methods, %[2]q);\n",
+	g.impl.Printf("PyMODINIT_FUNC\ninit%[1]s(void)\n{\n", g.pkg.pkg.Name())
+	g.impl.Indent()
+	g.impl.Printf("PyObject *module = NULL;\n\n")
+	for _, s := range structs {
+		g.impl.Printf("%sType.tp_new = PyType_GenericNew;\n", s.prefix("_"))
+		g.impl.Printf("if (PyType_Ready(&%sType) < 0) {\n", s.prefix("_"))
+		g.impl.Indent()
+		g.impl.Printf("return;\n")
+		g.impl.Outdent()
+		g.impl.Printf("}\n\n")
+	}
+	g.impl.Printf("module = Py_InitModule3(%[1]q, GoPy_%[1]s_Methods, %[2]q);\n\n",
 		g.pkg.pkg.Name(),
 		g.pkg.doc.Doc,
 	)
-	g.Outdent()
-	g.Printf("}\n\n")
+
+	for _, s := range structs {
+		g.impl.Printf("Py_INCREF(&%sType);\n", s.prefix("_"))
+		g.impl.Printf("PyModule_AddObject(module, %q, (PyObject*)&%sType);\n\n",
+			s.obj.Name(), s.prefix("_"),
+		)
+	}
+	g.impl.Outdent()
+	g.impl.Printf("}\n\n")
 
 	if len(g.err) > 0 {
 		return g.err
@@ -176,7 +206,7 @@ func (g *cpyGen) gen() error {
 
 func (g *cpyGen) genFunc(o *types.Func) {
 
-	g.Printf(`
+	g.impl.Printf(`
 /* pythonization of: %[2]s.%[1]s */
 static PyObject*
 gopy_%[1]s(PyObject *self, PyObject *args) {
@@ -184,10 +214,10 @@ gopy_%[1]s(PyObject *self, PyObject *args) {
 		o.Name(), g.pkg.pkg.Name(),
 	)
 
-	g.Indent()
+	g.impl.Indent()
 	g.genFuncBody(o)
-	g.Outdent()
-	g.Printf("}\n\n")
+	g.impl.Outdent()
+	g.impl.Printf("}\n\n")
 }
 
 func (g *cpyGen) genFuncBody(o *types.Func) {
@@ -198,7 +228,7 @@ func (g *cpyGen) genFuncBody(o *types.Func) {
 	res := newVars(sig.Results())
 	args := newVars(sig.Params())
 	for _, arg := range args {
-		arg.genDecl(g)
+		arg.genDecl(g.impl)
 		funcArgs = append(funcArgs, arg.getFuncArg())
 	}
 
@@ -207,9 +237,9 @@ func (g *cpyGen) genFuncBody(o *types.Func) {
 		switch len(res) {
 		case 1:
 			ret := res[0]
-			ret.genRetDecl(g)
+			ret.genRetDecl(g.impl)
 		default:
-			g.Printf("struct %[1]s_return c_gopy_ret;\n", o.Name())
+			g.impl.Printf("struct %[1]s_return c_gopy_ret;\n", o.Name())
 			/*
 					for i := 0; i < res.Len(); i++ {
 						ret := res.At(i)
@@ -217,16 +247,16 @@ func (g *cpyGen) genFuncBody(o *types.Func) {
 						if n == "" {
 							n = "gopy_" + strconv.Itoa(i)
 						}
-						g.Printf("%[1]s c_%[2]s;\n", ctypeName(ret.Type()), n)
+						g.impl.Printf("%[1]s c_%[2]s;\n", ctypeName(ret.Type()), n)
 				    }
 			*/
 		}
 	}
 
-	g.Printf("\n")
+	g.impl.Printf("\n")
 
 	if len(args) > 0 {
-		g.Printf("if (!PyArg_ParseTuple(args, ")
+		g.impl.Printf("if (!PyArg_ParseTuple(args, ")
 		format := []string{}
 		pyaddrs := []string{}
 		for _, arg := range args {
@@ -234,30 +264,30 @@ func (g *cpyGen) genFuncBody(o *types.Func) {
 			format = append(format, pyfmt)
 			pyaddrs = append(pyaddrs, addr)
 		}
-		g.Printf("%q, %s)) {\n", strings.Join(format, ""), strings.Join(pyaddrs, ", "))
-		g.Indent()
-		g.Printf("return NULL;\n")
-		g.Outdent()
-		g.Printf("}\n\n")
+		g.impl.Printf("%q, %s)) {\n", strings.Join(format, ""), strings.Join(pyaddrs, ", "))
+		g.impl.Indent()
+		g.impl.Printf("return NULL;\n")
+		g.impl.Outdent()
+		g.impl.Printf("}\n\n")
 	}
 
 	if len(args) > 0 {
 		for _, arg := range args {
-			arg.genFuncPreamble(g)
+			arg.genFuncPreamble(g.impl)
 		}
-		g.Printf("\n")
+		g.impl.Printf("\n")
 	}
 
 	if len(res) > 0 {
-		g.Printf("c_gopy_ret = ")
+		g.impl.Printf("c_gopy_ret = ")
 	}
 
-	g.Printf("GoPy_%[1]s(%[2]s);\n", o.Name(), strings.Join(funcArgs, ", "))
+	g.impl.Printf("GoPy_%[1]s(%[2]s);\n", o.Name(), strings.Join(funcArgs, ", "))
 
-	g.Printf("\n")
+	g.impl.Printf("\n")
 
 	if len(res) <= 0 {
-		g.Printf("Py_INCREF(Py_None);\nreturn Py_None;\n")
+		g.impl.Printf("Py_INCREF(Py_None);\nreturn Py_None;\n")
 		return
 	}
 
@@ -277,14 +307,93 @@ func (g *cpyGen) genFuncBody(o *types.Func) {
 		}
 	}
 
-	g.Printf("return Py_BuildValue(%q, %s);\n",
+	g.impl.Printf("return Py_BuildValue(%q, %s);\n",
 		strings.Join(format, ""),
 		strings.Join(funcArgs, ", "),
 	)
-	//g.Printf("return NULL;\n")
+	//g.impl.Printf("return NULL;\n")
+}
+
+func (g *cpyGen) genStruct(obj *types.TypeName, typ *types.Struct) {
+	pkgname := obj.Pkg().Name()
+	prefix := pkgname + "_" + obj.Name()
+
+	//fmt.Printf("obj: %#v\ntyp: %#v\n", obj, typ)
+	g.decl.Printf("/* type for struct %v\n", obj.Name())
+	g.decl.Printf(" */\n")
+	g.decl.Printf("typedef struct {\n")
+	g.decl.Indent()
+	g.decl.Printf("PyObject_HEAD\n")
+	g.decl.Printf("void *ptr; /* unsafe.Pointer to %s */\n", obj.Name())
+	g.decl.Outdent()
+	g.decl.Printf("} _gopy_%sObject;\n", prefix)
+	g.decl.Printf("\n\n")
+
+	g.impl.Printf("static PyMemberDef _gopy_%s_members[] = {\n", prefix)
+	g.impl.Indent()
+	g.impl.Printf("{NULL} /* sentinel */\n")
+	g.impl.Outdent()
+	g.impl.Printf("};\n\n")
+
+	g.impl.Printf("static PyMemberDef _gopy_%s_members[] = {\n", prefix)
+	g.impl.Indent()
+	g.impl.Printf("{NULL} /* sentinel */\n")
+	g.impl.Outdent()
+	g.impl.Printf("};\n\n")
+
+	g.impl.Printf("static PyMethodDef _gopy_%s_methods[] = {\n", prefix)
+	g.impl.Indent()
+	g.impl.Printf("{NULL} /* sentinel */\n")
+	g.impl.Outdent()
+	g.impl.Printf("};\n\n")
+
+	g.impl.Printf("static PyTypeObject _gopy_%sType = {\n", prefix)
+	g.impl.Indent()
+	g.impl.Printf("PyObject_HEAD_INIT(NULL)\n")
+	g.impl.Printf("0,\t/*ob_size*/\n")
+	g.impl.Printf("\"%s.%s\",\t/*tp_name*/\n", pkgname, obj.Name())
+	g.impl.Printf("sizeof(_gopy_%sObject),\t/*tp_basicsize*/\n", prefix)
+	g.impl.Printf("0,\t/*tp_itemsize*/\n")
+	g.impl.Printf("0,\t/*tp_dealloc*/\n")
+	g.impl.Printf("0,\t/*tp_print*/\n")
+	g.impl.Printf("0,\t/*tp_getattr*/\n")
+	g.impl.Printf("0,\t/*tp_setattr*/\n")
+	g.impl.Printf("0,\t/*tp_compare*/\n")
+	g.impl.Printf("0,\t/*tp_repr*/\n")
+	g.impl.Printf("0,\t/*tp_as_number*/\n")
+	g.impl.Printf("0,\t/*tp_as_sequence*/\n")
+	g.impl.Printf("0,\t/*tp_as_mapping*/\n")
+	g.impl.Printf("0,\t/*tp_hash */\n")
+	g.impl.Printf("0,\t/*tp_call*/\n")
+	g.impl.Printf("0,\t/*tp_str*/\n")
+	g.impl.Printf("0,\t/*tp_getattro*/\n")
+	g.impl.Printf("0,\t/*tp_setattro*/\n")
+	g.impl.Printf("0,\t/*tp_as_buffer*/\n")
+	g.impl.Printf("Py_TPFLAGS_DEFAULT,\t/*tp_flags*/\n")
+	g.impl.Printf("%q,\t/* tp_doc */\n", g.pkg.getDoc(obj))
+	g.impl.Printf("0,\t/* tp_traverse */\n")
+	g.impl.Printf("0,\t/* tp_clear */\n")
+	g.impl.Printf("0,\t/* tp_richcompare */\n")
+	g.impl.Printf("0,\t/* tp_weaklistoffset */\n")
+	g.impl.Printf("0,\t/* tp_iter */\n")
+	g.impl.Printf("0,\t/* tp_iternext */\n")
+	g.impl.Printf("_gopy_%s_methods,             /* tp_methods */\n", prefix)
+	g.impl.Printf("_gopy_%s_members,             /* tp_members */\n", prefix)
+	g.impl.Printf("0,\t/* tp_getset */\n")
+	g.impl.Printf("0,\t/* tp_base */\n")
+	g.impl.Printf("0,\t/* tp_dict */\n")
+	g.impl.Printf("0,\t/* tp_descr_get */\n")
+	g.impl.Printf("0,\t/* tp_descr_set */\n")
+	g.impl.Printf("0,\t/* tp_dictoffset */\n")
+	g.impl.Printf("(initproc)_gopy_%s_init,      /* tp_init */\n", prefix)
+	g.impl.Printf("0,                         /* tp_alloc */\n")
+	g.impl.Printf("Noddy_new,                 /* tp_new */\n")
+	g.impl.Outdent()
+	g.impl.Printf("};\n\n")
+
 }
 
 func (g *cpyGen) genPreamble() {
 	n := g.pkg.pkg.Name()
-	g.Printf(cPreamble, n, g.pkg.pkg.Path())
+	g.decl.Printf(cPreamble, n, g.pkg.pkg.Path())
 }

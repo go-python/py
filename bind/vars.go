@@ -5,6 +5,8 @@
 package bind
 
 import (
+	"fmt"
+
 	"golang.org/x/tools/go/types"
 )
 
@@ -31,6 +33,17 @@ func newVar(v *types.Var) *Var {
 		if ok {
 			vv.dtype = dtype
 		}
+	case *types.Named:
+		switch typ.Underlying().(type) {
+		case *types.Struct:
+			vv.dtype = typedesc{
+				ctype:   "GoPy_" + typ.Obj().Name(),
+				cgotype: "GoPy_" + typ.Obj().Name(),
+				pyfmt:   "N",
+			}
+		}
+	default:
+		panic(fmt.Errorf("unhandled type: %#v\n", typ))
 	}
 	return vv
 }
@@ -59,14 +72,14 @@ func (v *Var) isGoString() bool {
 	return false
 }
 
-func (v *Var) genDecl(g *cpyGen) {
+func (v *Var) genDecl(g *printer) {
 	if v.isGoString() {
 		g.Printf("const char* cgopy_%s;\n", v.Var.Name())
 	}
 	g.Printf("%[1]s c_%[2]s;\n", v.CGoType(), v.Var.Name())
 }
 
-func (v *Var) genRetDecl(g *cpyGen) {
+func (v *Var) genRetDecl(g *printer) {
 	if v.isGoString() {
 		g.Printf("const char* cgopy_gopy_ret;\n")
 	}
@@ -81,7 +94,7 @@ func (v *Var) getArgParse() (string, string) {
 	return v.dtype.pyfmt, addr
 }
 
-func (v *Var) genFuncPreamble(g *cpyGen) {
+func (v *Var) genFuncPreamble(g *printer) {
 	if v.isGoString() {
 		g.Printf("c_%[1]s = _cgopy_makegostring(cgopy_%[1]s);\n", v.Var.Name())
 	}

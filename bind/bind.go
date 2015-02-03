@@ -96,16 +96,25 @@ func (p *Package) getDoc(o types.Object) string {
 func GenCPython(w io.Writer, fset *token.FileSet, pkg *Package) error {
 	buf := new(bytes.Buffer)
 	gen := &cpyGen{
-		printer: &printer{buf: buf, indentEach: []byte("\t")},
-		fset:    fset,
-		pkg:     pkg,
+		decl: &printer{buf: buf, indentEach: []byte("\t")},
+		impl: &printer{buf: buf, indentEach: []byte("\t")},
+		fset: fset,
+		pkg:  pkg,
 	}
 	err := gen.gen()
 	if err != nil {
 		return err
 	}
 
-	_, err = io.Copy(w, gen.buf)
+	_, err = io.Copy(w, gen.decl.buf)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, gen.impl.buf)
+	if err != nil {
+		return err
+	}
 
 	return err
 }
