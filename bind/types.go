@@ -8,6 +8,19 @@ import (
 	"golang.org/x/tools/go/types"
 )
 
+func needWrapType(typ types.Type) bool {
+	switch typ.(type) {
+	case *types.Struct:
+		return true
+	case *types.Named:
+		switch typ.Underlying().(type) {
+		case *types.Struct:
+			return true
+		}
+	}
+	return false
+}
+
 func cTypeName(typ types.Type) string {
 	switch typ := typ.(type) {
 	case *types.Basic:

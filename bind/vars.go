@@ -24,28 +24,35 @@ func newVars(tuple *types.Tuple) []*Var {
 }
 
 func newVar(v *types.Var) *Var {
-	vv := &Var{
-		Var: v,
+	return &Var{
+		Var:   v,
+		dtype: getTypedesc(v.Type()),
 	}
-	switch typ := v.Type().(type) {
+}
+
+func getTypedesc(t types.Type) typedesc {
+	switch typ := t.(type) {
 	case *types.Basic:
 		dtype, ok := typedescr[typ.Kind()]
 		if ok {
-			vv.dtype = dtype
+			return dtype
 		}
 	case *types.Named:
 		switch typ.Underlying().(type) {
 		case *types.Struct:
-			vv.dtype = typedesc{
+			return typedesc{
 				ctype:   "GoPy_" + typ.Obj().Name(),
 				cgotype: "GoPy_" + typ.Obj().Name(),
 				pyfmt:   "N",
 			}
 		}
+	case *types.Pointer:
+		elem := typ.Elem()
+		return getTypedesc(elem)
 	default:
 		panic(fmt.Errorf("unhandled type: %#v\n", typ))
 	}
-	return vv
+	return typedesc{}
 }
 
 func (v *Var) GoType() types.Type {
@@ -96,10 +103,15 @@ func (v *Var) getArgParse() (string, string) {
 
 func (v *Var) genFuncPreamble(g *printer) {
 	if v.isGoString() {
-		g.Printf("c_%[1]s = _cgopy_makegostring(cgopy_%[1]s);\n", v.Var.Name())
+		g.Printf("c_%[1]s = CGoPy_GoString((char*)cgopy_%[1]s);\n", v.Var.Name())
 	}
 }
 
 func (v *Var) getFuncArg() string {
 	return "c_" + v.Var.Name()
+}
+
+func (v *Var) needWrap() bool {
+	typ := v.GoType()
+	return needWrapType(typ)
 }
